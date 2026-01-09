@@ -1,0 +1,64 @@
+# Design notes
+
+This document summarizes the major design goals and architecture choices for the
+Rust implementation.
+
+## Goals
+
+- Preserve external behavior and wire compatibility where feasible.
+- Improve safety by minimizing unsafe code and isolating FFI boundaries.
+- Maintain or improve performance relative to the C implementation.
+
+## Architecture (Rust workspace)
+
+Crates are organized so core logic and performance-sensitive code are isolated:
+
+- slipstream-core: shared types, parsing, and TCP helpers.
+- slipstream-dns: DNS codec, base32, and dot formatting logic.
+- slipstream-ffi: picoquic FFI bindings and runtime helpers.
+- slipstream-client: CLI and client runtime.
+- slipstream-server: CLI and server runtime.
+
+## QUIC and multipath
+
+Multipath QUIC support is provided by picoquic. The Rust code uses an FFI wrapper
+so the application logic is in Rust while keeping multipath behavior intact.
+Unsafe code is constrained to the FFI layer, and higher-level APIs avoid raw
+pointer exposure where possible.
+
+## DNS codec
+
+The DNS codec is intentionally minimal and treats parsing as an attack surface:
+
+- Strict bounds checks on message length and label lengths.
+- Hard caps on decoded payload sizes.
+- Explicit error handling with drop vs reply behavior.
+
+Golden vectors (fixtures/vectors/dns-vectors.json) are treated as the source of
+truth for DNS behavior.
+
+## Event loop and concurrency
+
+The runtime centers around a connection manager that owns QUIC state, timers, and
+per-connection queues. UDP receive/send and TCP accept/read/write are handled by
+separate tasks, with bounded channels used to limit memory growth under load.
+
+## Safety and shutdown
+
+- CLI validation enforces required flags and valid host:port parsing.
+- Backpressure is applied via connection-level max_data.
+- Shutdown follows explicit states (drain, close, force terminate) to avoid hangs
+  and minimize data loss.
+
+## Performance strategy
+
+- Measure first with benchmark harnesses (see docs/benchmarks.md).
+- Reuse buffers and avoid per-packet allocations in the hot path.
+- Keep the DNS codec simple and predictable.
+- Make logging configurable and avoid hot-path overhead by default.
+
+## Testing and interop
+
+- DNS codec behavior is validated against golden vectors.
+- Interop harnesses ensure Rust <-> C compatibility.
+- Integration tests cover local loopback and shutdown behavior.

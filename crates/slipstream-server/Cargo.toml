@@ -1,0 +1,12 @@
+[package]
+name = "slipstream-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { workspace = true }
+slipstream-core = { path = "../slipstream-core" }
+slipstream-dns = { path = "../slipstream-dns" }
+slipstream-ffi = { path = "../slipstream-ffi" }
+libc = "0.2"
+tokio = { version = "1.37", features = ["io-util", "macros", "net", "rt", "sync", "time"] }

@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  rust-tests:
+    name: Rust Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out slipstream-rust
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake pkg-config libssl-dev python3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Rust fmt
+        run: cargo fmt --check
+
+      - name: Rust tests
+        env:
+          RUST_BACKTRACE: "1"
+        run: |
+          cargo test -p slipstream-dns
+          cargo test
+
+  interop:
+    name: Interop (${{ matrix.script }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        script:
+          # C repo interop disabled (C repo currently broken).
+          # - run_local.sh
+          # - run_rust_client.sh
+          # - run_rust_server.sh
+          - run_rust_rust.sh
+    steps:
+      - name: Check out slipstream-rust
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # C repo interop disabled (C repo currently broken).
+      # - name: Check out C slipstream
+      #   uses: actions/checkout@v4
+      #   with:
+      #     repository: EndPositive/slipstream
+      #     path: slipstream-c
+      #     submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build cmake pkg-config libssl-dev python3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run interop script
+        env:
+          SLIPSTREAM_DIR: slipstream-c
+          RUST_BACKTRACE: "1"
+        run: ./scripts/interop/${{ matrix.script }}
+
+  benchmarks:
+    name: Bench (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: rust-rust
+            script: run_rust_rust_10mb.sh
+            needs_c: false
+          # C repo benchmark disabled (C repo currently broken).
+          # - name: c-c
+          #   script: run_c_c_10mb.sh
+          #   needs_c: true
+    steps:
+      - name: Check out slipstream-rust
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # C repo benchmark disabled (C repo currently broken).
+      # - name: Check out C slipstream
+      #   if: matrix.needs_c
+      #   uses: actions/checkout@v4
+      #   with:
+      #     repository: EndPositive/slipstream
+      #     path: slipstream-c
+      #     submodules: recursive
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y meson ninja-build cmake pkg-config libssl-dev python3
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run benchmark
+        env:
+          SLIPSTREAM_DIR: slipstream-c
+          RUNS: "5"
+          TRANSFER_BYTES: "10485760"
+        run: ./scripts/bench/${{ matrix.script }}
+
+      - name: Upload benchmark logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ matrix.name }}-logs
+          path: .interop/bench-${{ matrix.name }}-*
+          include-hidden-files: true
