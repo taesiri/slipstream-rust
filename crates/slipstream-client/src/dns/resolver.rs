@@ -1,17 +1,18 @@
 use crate::error::ClientError;
+use crate::net::SockaddrStorage;
 use crate::pacing::{PacingBudgetSnapshot, PacingPollBudget};
 use slipstream_core::resolve_host_port;
 use slipstream_ffi::{socket_addr_to_storage, ResolverMode, ResolverSpec};
 use std::collections::HashMap;
-use std::net::{SocketAddr, SocketAddrV6};
+use std::net::SocketAddr;
 use tracing::warn;
 
 use super::debug::DebugMetrics;
 
 pub(crate) struct ResolverState {
     pub(crate) addr: SocketAddr,
-    pub(crate) storage: libc::sockaddr_storage,
-    pub(crate) local_addr_storage: Option<libc::sockaddr_storage>,
+    pub(crate) storage: SockaddrStorage,
+    pub(crate) local_addr_storage: Option<SockaddrStorage>,
     pub(crate) mode: ResolverMode,
     pub(crate) added: bool,
     pub(crate) path_id: libc::c_int,
@@ -93,6 +94,12 @@ pub(crate) fn reset_resolver_path(resolver: &mut ResolverState) {
 }
 
 pub(crate) fn normalize_dual_stack_addr(addr: SocketAddr) -> SocketAddr {
+    #[cfg(windows)]
+    {
+        addr
+    }
+
+    #[cfg(not(windows))]
     match addr {
         SocketAddr::V4(v4) => {
             SocketAddr::V6(SocketAddrV6::new(v4.ip().to_ipv6_mapped(), v4.port(), 0, 0))
@@ -102,7 +109,7 @@ pub(crate) fn normalize_dual_stack_addr(addr: SocketAddr) -> SocketAddr {
 }
 
 pub(crate) fn sockaddr_storage_to_socket_addr(
-    storage: &libc::sockaddr_storage,
+    storage: &SockaddrStorage,
 ) -> Result<SocketAddr, ClientError> {
     slipstream_ffi::sockaddr_storage_to_socket_addr(storage).map_err(ClientError::new)
 }

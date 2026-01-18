@@ -10,3 +10,9 @@ readme = "../../README.md"
 [dependencies]
 libc = "0.2"
 slipstream-core = { path = "../slipstream-core" }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = ["Win32_Networking_WinSock"] }
+
+[build-dependencies]
+cc = "1"

@@ -3,6 +3,7 @@ use crate::dns::{
     sockaddr_storage_to_socket_addr, ResolverState,
 };
 use crate::error::ClientError;
+use crate::net::SockaddrStorage;
 use crate::streams::{ClientState, PathEvent};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_get_default_path_quality, picoquic_get_path_addr,
@@ -85,7 +86,7 @@ pub(crate) fn drain_path_events(
 }
 
 fn path_peer_addr(cnx: *mut picoquic_cnx_t, unique_path_id: u64) -> Option<SocketAddr> {
-    let mut storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut storage: SockaddrStorage = unsafe { std::mem::zeroed() };
     let ret = unsafe { picoquic_get_path_addr(cnx, unique_path_id, 2, &mut storage) };
     if ret != 0 {
         return None;

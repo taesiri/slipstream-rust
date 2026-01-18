@@ -1,4 +1,5 @@
 use crate::error::ClientError;
+use crate::net::{Sockaddr, SockaddrStorage};
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_get_path_addr, picoquic_probe_new_path_ex,
     slipstream_find_path_id_by_addr, slipstream_get_path_id_from_unique,
@@ -27,7 +28,7 @@ pub(crate) fn refresh_resolver_path(
         }
         resolver.unique_path_id = None;
     }
-    let peer = &resolver.storage as *const _ as *const libc::sockaddr;
+    let peer = &resolver.storage as *const _ as *const Sockaddr;
     let path_id = unsafe { slipstream_find_path_id_by_addr(cnx, peer) };
     if path_id < 0 {
         if resolver.added || resolver.path_id >= 0 {
@@ -51,7 +52,7 @@ pub(crate) fn add_paths(
         return Ok(());
     }
 
-    let mut local_storage: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+    let mut local_storage: SockaddrStorage = unsafe { std::mem::zeroed() };
     let ret = unsafe { picoquic_get_path_addr(cnx, 0, 1, &mut local_storage) };
     if ret != 0 {
         return Ok(());
@@ -75,8 +76,8 @@ pub(crate) fn add_paths(
         let ret = unsafe {
             picoquic_probe_new_path_ex(
                 cnx,
-                &resolver.storage as *const _ as *const libc::sockaddr,
-                &local_storage as *const _ as *const libc::sockaddr,
+                &resolver.storage as *const _ as *const Sockaddr,
+                &local_storage as *const _ as *const Sockaddr,
                 0,
                 now,
                 0,

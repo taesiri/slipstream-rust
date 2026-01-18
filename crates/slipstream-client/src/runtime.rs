@@ -12,6 +12,7 @@ use crate::dns::{
     send_poll_queries, sockaddr_storage_to_socket_addr, DnsResponseContext,
 };
 use crate::error::ClientError;
+use crate::net::{Sockaddr, SockaddrStorage};
 use crate::pacing::{cwnd_target_polls, inflight_packet_estimate};
 use crate::pinning::configure_pinned_certificate;
 use crate::streams::{
@@ -133,7 +134,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
     let cnx = unsafe {
         picoquic_create_client_cnx(
             quic,
-            &mut server_storage as *mut _ as *mut libc::sockaddr,
+            &mut server_storage as *mut _ as *mut Sockaddr,
             current_time,
             0,
             sni.as_ptr(),
@@ -163,7 +164,7 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
     }
 
     let mut dns_id = 1u16;
-    let mut recv_buf = vec![0u8; 4096];
+    let mut recv_buf = vec![0u8; 65535];
     let mut send_buf = vec![0u8; PICOQUIC_MAX_PACKET_SIZE];
     let packet_loop_send_max = loop_burst_total(&resolvers, PICOQUIC_PACKET_LOOP_SEND_MAX);
     let packet_loop_recv_max = loop_burst_total(&resolvers, PICOQUIC_PACKET_LOOP_RECV_MAX);
@@ -285,8 +286,8 @@ pub async fn run_client(config: &ClientConfig<'_>) -> Result<i32, ClientError> {
         for _ in 0..packet_loop_send_max {
             let current_time = unsafe { picoquic_current_time() };
             let mut send_length: libc::size_t = 0;
-            let mut addr_to: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-            let mut addr_from: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+            let mut addr_to: SockaddrStorage = unsafe { std::mem::zeroed() };
+            let mut addr_from: SockaddrStorage = unsafe { std::mem::zeroed() };
             let mut if_index: libc::c_int = 0;
             let mut log_cid = picoquic_connection_id_t {
                 id: [0; PICOQUIC_CONNECTION_ID_MAX_SIZE],

@@ -1,4 +1,5 @@
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -37,9 +38,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "Missing picotls headers; set PICOTLS_INCLUDE_DIR or build picoquic with PICOQUIC_FETCH_PTLS=ON.",
     )?;
 
-    let mut object_paths = Vec::with_capacity(1);
-
-    let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
     let cc_dir = manifest_dir.join("cc");
     let cc_src = cc_dir.join("slipstream_server_cc.c");
@@ -47,43 +45,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let poll_src = cc_dir.join("slipstream_poll.c");
     let test_helpers_src = cc_dir.join("slipstream_test_helpers.c");
     let picotls_layout_src = cc_dir.join("picotls_layout.c");
+    let wincompat_time_src = cc_dir.join("wincompat_time.c");
     println!("cargo:rerun-if-changed={}", cc_src.display());
     println!("cargo:rerun-if-changed={}", mixed_cc_src.display());
     println!("cargo:rerun-if-changed={}", poll_src.display());
     println!("cargo:rerun-if-changed={}", test_helpers_src.display());
     println!("cargo:rerun-if-changed={}", picotls_layout_src.display());
+    println!("cargo:rerun-if-changed={}", wincompat_time_src.display());
     let picoquic_internal = picoquic_include_dir.join("picoquic_internal.h");
     if picoquic_internal.exists() {
         println!("cargo:rerun-if-changed={}", picoquic_internal.display());
     }
-    let cc_obj = out_dir.join("slipstream_server_cc.c.o");
-    compile_cc(&cc_src, &cc_obj, &picoquic_include_dir)?;
-    object_paths.push(cc_obj);
-
-    let mixed_cc_obj = out_dir.join("slipstream_mixed_cc.c.o");
-    compile_cc(&mixed_cc_src, &mixed_cc_obj, &picoquic_include_dir)?;
-    object_paths.push(mixed_cc_obj);
-
-    let poll_obj = out_dir.join("slipstream_poll.c.o");
-    compile_cc(&poll_src, &poll_obj, &picoquic_include_dir)?;
-    object_paths.push(poll_obj);
-
-    let test_helpers_obj = out_dir.join("slipstream_test_helpers.c.o");
-    compile_cc(&test_helpers_src, &test_helpers_obj, &picoquic_include_dir)?;
-    object_paths.push(test_helpers_obj);
-
-    let picotls_layout_obj = out_dir.join("picotls_layout.c.o");
-    compile_cc_with_includes(
-        &picotls_layout_src,
-        &picotls_layout_obj,
-        &[&picoquic_include_dir, &picotls_include_dir],
-    )?;
-    object_paths.push(picotls_layout_obj);
-
-    let archive = out_dir.join("libslipstream_client_objs.a");
-    create_archive(&archive, &object_paths)?;
-    println!("cargo:rustc-link-search=native={}", out_dir.display());
-    println!("cargo:rustc-link-lib=static=slipstream_client_objs");
+    let mut cc_build = cc::Build::new();
+    if cfg!(windows) {
+        cc_build.define("_WINDOWS", None);
+        cc_build.define("WIN32", None);
+    }
+    cc_build
+        .include(&picoquic_include_dir)
+        .include(&picotls_include_dir)
+        .file(&cc_src)
+        .file(&mixed_cc_src)
+        .file(&poll_src)
+        .file(&test_helpers_src)
+        .file(&picotls_layout_src)
+        .flag_if_supported("-fPIC");
+    if cfg!(windows) {
+        cc_build.file(&wincompat_time_src);
+    }
+    cc_build.compile("slipstream_client_objs");
 
     let picoquic_libs = resolve_picoquic_libs(&picoquic_lib_dir).ok_or(
         "Missing picoquic build artifacts; run ./scripts/build_picoquic.sh or set PICOQUIC_BUILD_DIR/PICOQUIC_LIB_DIR.",
@@ -95,9 +85,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("cargo:rustc-link-lib=static={}", lib);
     }
 
-    println!("cargo:rustc-link-lib=dylib=ssl");
-    println!("cargo:rustc-link-lib=dylib=crypto");
-    println!("cargo:rustc-link-lib=dylib=pthread");
+    if !cfg!(windows) {
+        println!("cargo:rustc-link-lib=dylib=ssl");
+        println!("cargo:rustc-link-lib=dylib=crypto");
+        println!("cargo:rustc-link-lib=dylib=pthread");
+    }
 
     Ok(())
 }
@@ -141,7 +133,12 @@ fn build_picoquic() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join(".picoquic-build"));
 
-    let status = Command::new(script)
+    if cfg!(windows) {
+        return build_picoquic_windows(&picoquic_dir, &build_dir);
+    }
+
+    let status = Command::new(&script)
+        .current_dir(&root)
         .env("PICOQUIC_DIR", picoquic_dir)
         .env("PICOQUIC_BUILD_DIR", build_dir)
         .status()?;
@@ -150,6 +147,149 @@ fn build_picoquic() -> Result<(), Box<dyn std::error::Error>> {
             "picoquic auto-build failed (run scripts/build_picoquic.sh for details)".into(),
         );
     }
+    Ok(())
+}
+
+fn find_cmake_exe() -> Option<PathBuf> {
+    if let Ok(dir) = env::var("CMAKE") {
+        let candidate = PathBuf::from(dir);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    let program_files = [
+        "C:\\Program Files\\CMake\\bin\\cmake.exe",
+        "C:\\Program Files (x86)\\CMake\\bin\\cmake.exe",
+    ];
+    for path in program_files {
+        let candidate = PathBuf::from(path);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    if let Some(path_var) = env::var_os("PATH") {
+        for entry in env::split_paths(&path_var) {
+            let candidate = entry.join("cmake.exe");
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+fn find_pkgconf_exe() -> Option<PathBuf> {
+    if let Ok(dir) = env::var("PKG_CONFIG_EXECUTABLE") {
+        let candidate = PathBuf::from(dir);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(dir) = env::var("PKG_CONFIG") {
+        let candidate = PathBuf::from(dir);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(root) = env::var("VCPKG_ROOT") {
+        let tools_dir = Path::new(&root).join("downloads").join("tools").join("msys2");
+        if let Ok(entries) = fs::read_dir(&tools_dir) {
+            for entry in entries.flatten() {
+                let base = entry.path();
+                let mingw64 = base.join("mingw64").join("bin").join("pkgconf.exe");
+                if mingw64.exists() {
+                    return Some(mingw64);
+                }
+                let usr = base.join("usr").join("bin").join("pkgconf.exe");
+                if usr.exists() {
+                    return Some(usr);
+                }
+            }
+        }
+    }
+
+    if let Some(path_var) = env::var_os("PATH") {
+        for entry in env::split_paths(&path_var) {
+            let pkgconf = entry.join("pkgconf.exe");
+            if pkgconf.exists() {
+                return Some(pkgconf);
+            }
+            let pkgconfig = entry.join("pkg-config.exe");
+            if pkgconfig.exists() {
+                return Some(pkgconfig);
+            }
+        }
+    }
+
+    None
+}
+
+fn build_picoquic_windows(
+    picoquic_dir: &Path,
+    build_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cmake = find_cmake_exe().unwrap_or_else(|| PathBuf::from("cmake"));
+    let build_type = env::var("BUILD_TYPE").unwrap_or_else(|_| "Release".to_string());
+    let fetch_ptls = env::var("PICOQUIC_FETCH_PTLS").unwrap_or_else(|_| "ON".to_string());
+    let pkgconf = find_pkgconf_exe();
+    let openssl_root = env::var("VCPKG_ROOT")
+        .ok()
+        .map(|root| Path::new(&root).join("installed").join("x64-windows-static-md"));
+
+    let mut configure = Command::new(&cmake);
+    configure
+        .arg("-S")
+        .arg(picoquic_dir)
+        .arg("-B")
+        .arg(build_dir)
+        .arg(format!("-DCMAKE_BUILD_TYPE={}", build_type))
+        .arg(format!("-DPICOQUIC_FETCH_PTLS={}", fetch_ptls))
+        .arg("-DCMAKE_POSITION_INDEPENDENT_CODE=ON");
+    if let Some(pkgconf) = pkgconf {
+        configure.arg(format!(
+            "-DPKG_CONFIG_EXECUTABLE={}",
+            pkgconf.display()
+        ));
+    }
+    if let Some(root) = openssl_root.as_ref().filter(|dir| dir.exists()) {
+        configure
+            .arg(format!("-DOPENSSL_ROOT_DIR={}", root.display()))
+            .arg("-DOPENSSL_USE_STATIC_LIBS=ON");
+    }
+    let status = configure.status()?;
+    if !status.success() {
+        return Err("picoquic CMake configure failed".into());
+    }
+
+    let picotls_include = build_dir
+        .join("_deps")
+        .join("picotls-src")
+        .join("include");
+    let wincompat_src = picoquic_dir.join("picoquic").join("wincompat.h");
+    if picotls_include.exists() && wincompat_src.exists() {
+        let wincompat_dst = picotls_include.join("wincompat.h");
+        fs::copy(&wincompat_src, &wincompat_dst)?;
+    }
+
+    let status = Command::new(&cmake)
+        .arg("--build")
+        .arg(build_dir)
+        .arg("--target")
+        .arg("picoquic-core")
+        .arg("picotls-core")
+        .arg("picotls-openssl")
+        .arg("picotls-fusion")
+        .arg("picotls-minicrypto")
+        .status()?;
+    if !status.success() {
+        return Err("picoquic CMake build failed".into());
+    }
+
     Ok(())
 }
 
@@ -289,11 +429,13 @@ struct PicoquicLibs {
 }
 
 fn resolve_picoquic_libs(dir: &Path) -> Option<PicoquicLibs> {
-    if let Some(libs) = resolve_picoquic_libs_single_dir(dir) {
-        return Some(PicoquicLibs {
-            search_dirs: vec![dir.to_path_buf()],
-            libs,
-        });
+    for candidate in candidate_lib_dirs(dir) {
+        if let Some(libs) = resolve_picoquic_libs_single_dir(&candidate) {
+            return Some(PicoquicLibs {
+                search_dirs: vec![candidate],
+                libs,
+            });
+        }
     }
 
     let mut picotls_dirs = vec![dir.join("_deps").join("picotls-build")];
@@ -301,33 +443,58 @@ fn resolve_picoquic_libs(dir: &Path) -> Option<PicoquicLibs> {
         picotls_dirs.push(parent.join("_deps").join("picotls-build"));
     }
     for picotls_dir in picotls_dirs {
-        if let Some(libs) = resolve_picoquic_libs_split(dir, &picotls_dir) {
-            let mut search_dirs = vec![dir.to_path_buf()];
-            if picotls_dir != dir && !search_dirs.contains(&picotls_dir) {
-                search_dirs.push(picotls_dir);
+        for picoquic_dir in candidate_lib_dirs(dir) {
+            for picotls_candidate in candidate_lib_dirs(&picotls_dir) {
+                if let Some(libs) = resolve_picoquic_libs_split(&picoquic_dir, &picotls_candidate)
+                {
+                    let mut search_dirs = vec![picoquic_dir];
+                    if picotls_candidate != search_dirs[0]
+                        && !search_dirs.contains(&picotls_candidate)
+                    {
+                        search_dirs.push(picotls_candidate);
+                    }
+                    return Some(PicoquicLibs { search_dirs, libs });
+                }
             }
-            return Some(PicoquicLibs { search_dirs, libs });
         }
     }
 
     if let Some(parent) = dir.parent() {
-        if let Some(libs) = resolve_picoquic_libs_split(parent, dir) {
-            return Some(PicoquicLibs {
-                search_dirs: vec![parent.to_path_buf(), dir.to_path_buf()],
-                libs,
-            });
+        for picoquic_dir in candidate_lib_dirs(parent) {
+            for picotls_dir in candidate_lib_dirs(dir) {
+                if let Some(libs) = resolve_picoquic_libs_split(&picoquic_dir, &picotls_dir) {
+                    return Some(PicoquicLibs {
+                        search_dirs: vec![picoquic_dir, picotls_dir],
+                        libs,
+                    });
+                }
+            }
         }
         if let Some(grandparent) = parent.parent() {
-            if let Some(libs) = resolve_picoquic_libs_split(grandparent, dir) {
-                return Some(PicoquicLibs {
-                    search_dirs: vec![grandparent.to_path_buf(), dir.to_path_buf()],
-                    libs,
-                });
+            for picoquic_dir in candidate_lib_dirs(grandparent) {
+                for picotls_dir in candidate_lib_dirs(dir) {
+                    if let Some(libs) = resolve_picoquic_libs_split(&picoquic_dir, &picotls_dir)
+                    {
+                        return Some(PicoquicLibs {
+                            search_dirs: vec![picoquic_dir, picotls_dir],
+                            libs,
+                        });
+                    }
+                }
             }
         }
     }
 
     None
+}
+
+fn candidate_lib_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut dirs = vec![dir.to_path_buf()];
+    if cfg!(windows) {
+        dirs.push(dir.join("Debug"));
+        dirs.push(dir.join("Release"));
+    }
+    dirs
 }
 
 fn resolve_picoquic_libs_single_dir(dir: &Path) -> Option<Vec<&'static str>> {
@@ -365,6 +532,17 @@ fn resolve_picoquic_libs_split(
 }
 
 fn find_lib_variant<'a>(dir: &Path, underscored: &'a str, hyphenated: &'a str) -> Option<&'a str> {
+    if cfg!(windows) {
+        let underscored_path = dir.join(format!("{}.lib", underscored));
+        if underscored_path.exists() {
+            return Some(underscored);
+        }
+        let hyphen_path = dir.join(format!("{}.lib", hyphenated));
+        if hyphen_path.exists() {
+            return Some(hyphenated);
+        }
+    }
+
     let underscored_path = dir.join(format!("lib{}.a", underscored));
     if underscored_path.exists() {
         return Some(underscored);
@@ -376,57 +554,3 @@ fn find_lib_variant<'a>(dir: &Path, underscored: &'a str, hyphenated: &'a str) -
     None
 }
 
-fn create_archive(archive: &Path, objects: &[PathBuf]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut command = std::process::Command::new("ar");
-    command.arg("crus").arg(archive);
-    for obj in objects {
-        command.arg(obj);
-    }
-    let status = command.status()?;
-    if !status.success() {
-        return Err("Failed to create static archive for slipstream objects.".into());
-    }
-    Ok(())
-}
-
-fn compile_cc(
-    source: &Path,
-    output: &Path,
-    picoquic_include_dir: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let status = Command::new("cc")
-        .arg("-c")
-        .arg("-fPIC")
-        .arg(source)
-        .arg("-o")
-        .arg(output)
-        .arg("-I")
-        .arg(picoquic_include_dir)
-        .status()?;
-    if !status.success() {
-        return Err(format!("Failed to compile {}.", source.display()).into());
-    }
-    Ok(())
-}
-
-fn compile_cc_with_includes(
-    source: &Path,
-    output: &Path,
-    include_dirs: &[&Path],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut command = Command::new("cc");
-    command
-        .arg("-c")
-        .arg("-fPIC")
-        .arg(source)
-        .arg("-o")
-        .arg(output);
-    for dir in include_dirs {
-        command.arg("-I").arg(dir);
-    }
-    let status = command.status()?;
-    if !status.success() {
-        return Err(format!("Failed to compile {}.", source.display()).into());
-    }
-    Ok(())
-}

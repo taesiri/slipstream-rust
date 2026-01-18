@@ -1,4 +1,5 @@
 use crate::error::ClientError;
+use crate::net::{Sockaddr, SockaddrStorage};
 use slipstream_dns::decode_response;
 use slipstream_ffi::picoquic::{
     picoquic_cnx_t, picoquic_current_time, picoquic_incoming_packet_ex, picoquic_quic_t,
@@ -13,7 +14,7 @@ const MAX_POLL_BURST: usize = PICOQUIC_PACKET_LOOP_RECV_MAX;
 
 pub(crate) struct DnsResponseContext<'a> {
     pub(crate) quic: *mut picoquic_quic_t,
-    pub(crate) local_addr_storage: &'a libc::sockaddr_storage,
+    pub(crate) local_addr_storage: &'a SockaddrStorage,
     pub(crate) resolvers: &'a mut [ResolverState],
 }
 
@@ -47,8 +48,8 @@ pub(crate) fn handle_dns_response(
                 ctx.quic,
                 payload.as_ptr() as *mut u8,
                 payload.len(),
-                &mut peer_storage as *mut _ as *mut libc::sockaddr,
-                &mut local_storage as *mut _ as *mut libc::sockaddr,
+                &mut peer_storage as *mut _ as *mut Sockaddr,
+                &mut local_storage as *mut _ as *mut Sockaddr,
                 0,
                 0,
                 &mut first_cnx,

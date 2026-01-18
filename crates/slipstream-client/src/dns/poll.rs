@@ -9,6 +9,7 @@ use tokio::net::UdpSocket as TokioUdpSocket;
 
 use super::path::refresh_resolver_path;
 use super::resolver::{normalize_dual_stack_addr, sockaddr_storage_to_socket_addr, ResolverState};
+use crate::net::SockaddrStorage;
 
 const AUTHORITATIVE_POLL_TIMEOUT_US: u64 = 5_000_000;
 
@@ -33,7 +34,7 @@ pub(crate) async fn send_poll_queries(
     cnx: *mut picoquic_cnx_t,
     udp: &TokioUdpSocket,
     config: &ClientConfig<'_>,
-    local_addr_storage: &mut libc::sockaddr_storage,
+    local_addr_storage: &mut SockaddrStorage,
     dns_id: &mut u16,
     resolver: &mut ResolverState,
     remaining: &mut usize,
@@ -52,8 +53,8 @@ pub(crate) async fn send_poll_queries(
         }
 
         let mut send_length: libc::size_t = 0;
-        let mut addr_to: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
-        let mut addr_from: libc::sockaddr_storage = unsafe { std::mem::zeroed() };
+        let mut addr_to: SockaddrStorage = unsafe { std::mem::zeroed() };
+        let mut addr_from: SockaddrStorage = unsafe { std::mem::zeroed() };
         let mut if_index: libc::c_int = 0;
         let ret = unsafe {
             picoquic_prepare_packet_ex(

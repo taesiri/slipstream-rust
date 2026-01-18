@@ -1,5 +1,6 @@
 mod dns;
 mod error;
+mod net;
 mod pacing;
 mod pinning;
 mod runtime;
