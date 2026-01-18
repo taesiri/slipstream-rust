@@ -105,6 +105,11 @@ See `scripts/bench` for scripts used for obtaining these results.
 - tools/       Vector generator and helpers
 - vendor/      picoquic submodule
 
+## Windows support
+
+Windows builds are supported. See `docs/BUILD_WINDOWS.md` for the full setup,
+vcpkg/OpenSSL steps, and build instructions.
+
 ## License
 
 Apache-2.0. See LICENSE.
